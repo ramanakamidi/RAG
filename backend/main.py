@@ -42,6 +42,20 @@ SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 _embedding_model = None
 _gemini_client = None
 
+
+def effective_embedding_model() -> str:
+    name = EMBEDDING_MODEL_NAME.strip()
+    if EMBEDDING_PROVIDER.strip().lower() == "api" and not re.match(
+        r"^(models/)?(gemini|text)-[a-z0-9.-]+", name
+    ):
+        print(
+            f"[warn] EMBEDDING_MODEL_NAME={name!r} is not a Gemini API model; "
+            "falling back to gemini-embedding-2 for EMBEDDING_PROVIDER=api.",
+            flush=True,
+        )
+        return "gemini-embedding-2"
+    return name
+
 # ----------------------------- HELPERS -----------------------------
 
 
@@ -76,7 +90,7 @@ def _embed_texts_batch(client, texts: List[str]) -> List[List[float]]:
     from google.genai import types
 
     response = client.models.embed_content(
-        model=EMBEDDING_MODEL_NAME,
+        model=effective_embedding_model(),
         contents=texts,
         config=types.EmbedContentConfig(output_dimensionality=EMBEDDING_DIMENSIONS),
     )
@@ -84,12 +98,6 @@ def _embed_texts_batch(client, texts: List[str]) -> List[List[float]]:
 
 
 def _embed_texts_gemini_api(texts: List[str]) -> List[List[float]]:
-    if EMBEDDING_MODEL_NAME.lower() in {"all-minilm-l6-v2", "all-minilm-l6-v2 "}:
-        raise RuntimeError(
-            "EMBEDDING_MODEL_NAME is set to a local sentence-transformers model but "
-            "EMBEDDING_PROVIDER=api. Update EMBEDDING_MODEL_NAME to gemini-embedding-2 "
-            "(or set EMBEDDING_PROVIDER=local to use the local model)."
-        )
     client = get_gemini_client()
     results: List[List[float]] = []
     batch: List[str] = []
@@ -266,7 +274,7 @@ def health():
         "status": "ok" if db_ok else "degraded",
         "database": db_ok,
         "embedding_provider": EMBEDDING_PROVIDER,
-        "embedding_model": EMBEDDING_MODEL_NAME,
+        "embedding_model": effective_embedding_model(),
         "embedding_dimensions": EMBEDDING_DIMENSIONS,
         "gemini_model": GEMINI_MODEL_NAME,
         "google_genai_version": sdk_version,
