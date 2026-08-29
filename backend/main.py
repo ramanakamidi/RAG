@@ -84,6 +84,12 @@ def _embed_texts_batch(client, texts: List[str]) -> List[List[float]]:
 
 
 def _embed_texts_gemini_api(texts: List[str]) -> List[List[float]]:
+    if EMBEDDING_MODEL_NAME.lower() in {"all-minilm-l6-v2", "all-minilm-l6-v2 "}:
+        raise RuntimeError(
+            "EMBEDDING_MODEL_NAME is set to a local sentence-transformers model but "
+            "EMBEDDING_PROVIDER=api. Update EMBEDDING_MODEL_NAME to gemini-embedding-2 "
+            "(or set EMBEDDING_PROVIDER=local to use the local model)."
+        )
     client = get_gemini_client()
     results: List[List[float]] = []
     batch: List[str] = []
@@ -250,7 +256,21 @@ def health():
         db_ok = True
     except Exception:
         db_ok = False
-    return {"status": "ok" if db_ok else "degraded", "database": db_ok}
+    try:
+        import google.genai as genai
+
+        sdk_version = getattr(genai, "__version__", "unknown")
+    except Exception:
+        sdk_version = "unknown"
+    return {
+        "status": "ok" if db_ok else "degraded",
+        "database": db_ok,
+        "embedding_provider": EMBEDDING_PROVIDER,
+        "embedding_model": EMBEDDING_MODEL_NAME,
+        "embedding_dimensions": EMBEDDING_DIMENSIONS,
+        "gemini_model": GEMINI_MODEL_NAME,
+        "google_genai_version": sdk_version,
+    }
 
 
 @app.post("/upload")
