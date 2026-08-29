@@ -14,4 +14,8 @@ services:
       - key: GEMINI_MODEL_NAME
         value: gemini-3.6-flash
       - key: EMBEDDING_MODEL_NAME
-        value: all-MiniLM-L6-v2
+        value: gemini-embedding-2
+      - key: EMBEDDING_PROVIDER
+        value: api
+      - key: EMBEDDING_DIMENSIONS
+        value: "768"

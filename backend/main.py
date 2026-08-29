@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import uuid
 from io import BytesIO
@@ -20,7 +21,8 @@ load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-3.6-flash")
-EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "all-MiniLM-L6-v2")
+EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "api")
+EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "gemini-embedding-2")
 
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL environment variable is not set.")
@@ -30,7 +32,7 @@ if not GEMINI_API_KEY:
 CHUNK_SIZE = 100
 CHUNK_OVERLAP = 20
 TOP_K = 3
-EMBEDDING_DIMENSIONS = 384
+EMBEDDING_DIMENSIONS = int(os.getenv("EMBEDDING_DIMENSIONS", "768"))
 
 # ----------------------------- CLIENTS -----------------------------
 
@@ -61,6 +63,42 @@ def get_gemini_client():
     return _gemini_client
 
 
+def embed_texts(texts: List[str]) -> List[List[float]]:
+    provider = EMBEDDING_PROVIDER.strip().lower()
+    if provider == "api":
+        return _embed_texts_gemini_api(texts)
+    if provider == "local":
+        return get_embedding_model().encode(texts).tolist()
+    raise RuntimeError(f"Unknown EMBEDDING_PROVIDER: {EMBEDDING_PROVIDER!r}")
+
+
+def _embed_texts_batch(client, texts: List[str]) -> List[List[float]]:
+    from google.genai import types
+
+    response = client.models.embed_content(
+        model=EMBEDDING_MODEL_NAME,
+        contents=texts,
+        config=types.EmbedContentConfig(output_dimensionality=EMBEDDING_DIMENSIONS),
+    )
+    return [e.values for e in response.embeddings]
+
+
+def _embed_texts_gemini_api(texts: List[str]) -> List[List[float]]:
+    client = get_gemini_client()
+    results: List[List[float]] = []
+    batch: List[str] = []
+    batch_chars = 0
+    for text in texts:
+        if batch and batch_chars + len(text) > 20000:
+            results.extend(_embed_texts_batch(client, batch))
+            batch, batch_chars = [], 0
+        batch.append(text)
+        batch_chars += len(text)
+    if batch:
+        results.extend(_embed_texts_batch(client, batch))
+    return results
+
+
 def split_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> List[str]:
     words = text.split()
     chunks = []
@@ -73,13 +111,27 @@ def split_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVE
     return chunks
 
 
+def _current_embedding_dimension() -> Optional[int]:
+    try:
+        with engine.connect() as conn:
+            type_str = conn.execute(
+                text(
+                    "SELECT pg_catalog.format_type(a.atttypid, a.atttypmod) "
+                    "FROM pg_attribute a "
+                    "WHERE a.attrelid = 'documents'::regclass AND a.attname = 'embedding'"
+                )
+            ).scalar()
+    except Exception:
+        return None
+    if not type_str:
+        return None
+    match = re.search(r"\((\d+)\)", type_str)
+    return int(match.group(1)) if match else None
+
+
 def init_database():
     with engine.begin() as conn:
-        conn.execute(
-            text(
-                "CREATE EXTENSION IF NOT EXISTS vector;"
-            )
-        )
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
         conn.execute(
             text(
                 f"""
@@ -99,6 +151,30 @@ def init_database():
                 "ON documents USING hnsw (embedding vector_cosine_ops);"
             )
         )
+
+    current = _current_embedding_dimension()
+    if current is not None and current != EMBEDDING_DIMENSIONS:
+        with engine.begin() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS documents;"))
+            conn.execute(
+                text(
+                    f"""
+                    CREATE TABLE documents (
+                        id TEXT PRIMARY KEY,
+                        filename TEXT NOT NULL,
+                        chunk_index INTEGER NOT NULL,
+                        content TEXT NOT NULL,
+                        embedding vector({EMBEDDING_DIMENSIONS})
+                    );
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX documents_embedding_idx "
+                    "ON documents USING hnsw (embedding vector_cosine_ops);"
+                )
+            )
 
 
 def store_documents(filename: str, chunks: List[str], embeddings: List[List[float]]):
@@ -196,9 +272,7 @@ async def upload_pdf(file: UploadFile = File(...)):
             raise HTTPException(status_code=400, detail="No text could be extracted from this PDF.")
 
         chunks = split_text(text)
-
-        embedding_model = get_embedding_model()
-        embeddings = embedding_model.encode(chunks).tolist()
+        embeddings = embed_texts(chunks)
 
         store_documents(file.filename, chunks, embeddings)
 
@@ -221,8 +295,7 @@ def chat(request: ChatRequest):
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
     try:
-        embedding_model = get_embedding_model()
-        question_embedding = embedding_model.encode([question]).tolist()[0]
+        question_embedding = embed_texts([question])[0]
 
         retrieved_documents = retrieve_documents(question_embedding)
 

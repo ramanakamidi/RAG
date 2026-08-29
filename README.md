@@ -2,7 +2,7 @@
 
 A full-stack RAG (Retrieval-Augmented Generation) chatbot based on [chatbot_with_rag.ipynb](../chatbot_with_rag.ipynb).
 
-- **Backend**: FastAPI — PDF upload, text chunking, embeddings (sentence-transformers), retrieval + generation (Gemini).
+- **Backend**: FastAPI — PDF upload, text chunking, embeddings (Gemini `gemini-embedding-2`), retrieval + generation (Gemini).
 - **Database**: Neon (PostgreSQL) with `pgvector` for vector search.
 - **Frontend**: React (Vite) chat UI with PDF upload.
 
@@ -28,7 +28,10 @@ uvicorn main:app --reload
 
 API runs at `http://localhost:8000` (Swagger docs at `/docs`).
 
-On first request the embedding model (~90 MB) downloads automatically.
+Embeddings use the Gemini API (`gemini-embedding-2`, 768-dim) by default, so
+there is no local model to download. Optional local mode: set
+`EMBEDDING_PROVIDER=local` and `pip install sentence-transformers` (adds torch,
+a few hundred MB of RAM).
 
 ### Frontend
 
@@ -69,10 +72,6 @@ Directory). Do NOT remove it — newer Python versions lack prebuilt wheels for
 `psycopg2-binary` and break at import time. After changing `runtime.txt`, choose
 "Clear build cache" when triggering the manual deploy.
 
-Note: first boot downloads the sentence-transformers model, so the first
-request may take a while. Use at least the Starter/Render plan with enough
-memory (the model needs a few hundred MB).
-
 ### Frontend → Vercel
 
 1. Import the repo in Vercel → Root directory: `frontend`.
@@ -90,7 +89,8 @@ memory (the model needs a few hundred MB).
 
 ## Database
 
-`pgvector` stores chunk embeddings (384-dim, `all-MiniLM-L6-v2`) in the
+`pgvector` stores chunk embeddings (768-dim, Gemini `gemini-embedding-2`) in the
 `documents` table. Tables are created automatically on startup
 (`CREATE EXTENSION IF NOT EXISTS vector` requires superuser on Neon — Neon
-provides the `vector` extension by default).
+provides the `vector` extension by default). If `EMBEDDING_DIMENSIONS` changes,
+the `documents` table is dropped and recreated on startup (re-upload your PDFs).
