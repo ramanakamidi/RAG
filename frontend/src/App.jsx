@@ -1,8 +1,9 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import "./App.css";
 
-const BACKEND_URL =
-  import.meta.env.VITE_BACKEND_URL || "";
+const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || "").replace(/\/+$/, "");
+
+const fmtUrl = (path) => `${BACKEND_URL || "<same origin>"}${path}`;
 
 function App() {
   const [messages, setMessages] = useState([]);
@@ -11,8 +12,25 @@ function App() {
   const [uploading, setUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState(null);
   const [pdfName, setPdfName] = useState("");
+  const [backend, setBackend] = useState({ checking: true, ok: null, url: null });
   const fileInputRef = useRef(null);
   const messagesEndRef = useRef(null);
+
+  useEffect(() => {
+    fetch(`${BACKEND_URL}/health`, { method: "GET", signal: AbortSignal.timeout(20000) })
+      .then(async (res) => {
+        const data = await res.json().catch(() => null);
+        setBackend({
+          checking: false,
+          ok: res.ok && data?.database === true,
+          url: BACKEND_URL,
+          status: data?.status,
+        });
+      })
+      .catch(() =>
+        setBackend({ checking: false, ok: false, url: BACKEND_URL, status: "unreachable" })
+      );
+  }, []);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -38,16 +56,19 @@ function App() {
         method: "POST",
         body: formData,
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
       if (!res.ok) {
-        throw new Error(data.detail || "Upload failed.");
+        throw new Error(data?.detail || `Upload failed (HTTP ${res.status}).`);
       }
       setUploadStatus({
         type: "success",
         text: `Indexed ${data.chunks} chunks from "${data.filename}". You can now ask questions about it.`,
       });
     } catch (e) {
-      setUploadStatus({ type: "error", text: e.message });
+      setUploadStatus({
+        type: "error",
+        text: `Failed to reach ${fmtUrl("/upload")}: ${e.message}`,
+      });
     } finally {
       setUploading(false);
     }
@@ -69,9 +90,9 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
       if (!res.ok) {
-        throw new Error(data.detail || "Failed to get answer.");
+        throw new Error(data?.detail || `Failed to get answer (HTTP ${res.status}).`);
       }
       setMessages((prev) => [
         ...prev,
@@ -80,7 +101,10 @@ function App() {
     } catch (err) {
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: `Error: ${err.message}` },
+        {
+          role: "assistant",
+          content: `Error reaching ${fmtUrl("/chat")}:\n${err.message}`,
+        },
       ]);
     } finally {
       setLoading(false);
@@ -106,6 +130,13 @@ function App() {
       <header className="header">
         <h1>RAG Chatbot</h1>
         <p>Upload a PDF, then ask questions based on its content.</p>
+        <div className={`backend-banner ${backend.checking ? "checking" : backend.ok ? "ok" : "bad"}`}>
+          {backend.checking
+            ? "Checking backend connection..."
+            : backend.ok
+            ? `Connected to backend (${backend.url})`
+            : `Cannot reach backend at "${backend.url || "<same origin>"}" — set VITE_BACKEND_URL to https://rag-fu50.onrender.com and redeploy.`}
+        </div>
       </header>
 
       <div className="layout">
