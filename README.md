@@ -64,6 +64,11 @@ Option B (Manual web service):
 3. Start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
 4. Add env vars: `DATABASE_URL`, `GEMINI_API_KEY`.
 
+Note: the service pins Python 3.12 via `backend/runtime.txt` (must be in the Root
+Directory). Do NOT remove it — newer Python versions lack prebuilt wheels for
+`psycopg2-binary` and break at import time. After changing `runtime.txt`, choose
+"Clear build cache" when triggering the manual deploy.
+
 Note: first boot downloads the sentence-transformers model, so the first
 request may take a while. Use at least the Starter/Render plan with enough
 memory (the model needs a few hundred MB).
